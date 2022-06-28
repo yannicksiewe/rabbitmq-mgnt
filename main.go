@@ -7,6 +7,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -29,36 +30,52 @@ func handleError(err error, msg string) {
 	}
 }
 
-func connection() *rabbithole.Client {
+func connection() (me *rabbithole.Client, err error) {
 	if secureConnection == false {
 		amqpServerURL := []string{"http://", mqEndpoint, ":15672"}
-		rmqc, _ := rabbithole.NewClient(strings.Join(amqpServerURL, ""), defaultLogin, defaultPassword)
+		rmqc, err := rabbithole.NewClient(strings.Join(amqpServerURL, ""), defaultLogin, defaultPassword)
 
-		return rmqc
+		return rmqc, err
+
 	} else {
 		fmt.Println("Starting with HTTPS")
 		transport := &http.Transport{TLSClientConfig: tlsConfig}
 		amqpServerURL := []string{"https://", mqEndpoint}
-		rmqc, _ := rabbithole.NewTLSClient(strings.Join(amqpServerURL, ""), defaultLogin, defaultPassword, transport)
+		rmqc, err := rabbithole.NewTLSClient(strings.Join(amqpServerURL, ""), defaultLogin, defaultPassword, transport)
 
-		return rmqc
+		return rmqc, err
 	}
 }
 
 // Update user password and vhost Setting
 func updateuserpassword() error {
 	fmt.Println("Start password updated")
-	rmqc := connection()
-	resp, err := rmqc.PutUser(loginName, rabbithole.UserSettings{Password: loginPassword, Tags: "administrator"})
-	handleError(err, "Failed to Update User Password")
-	fmt.Println(resp)
+	rmqc, err := connection()
+
 	if err != nil {
+		fmt.Println("Check endpoint url:", err)
 		return err
+	}
+
+	_, listhosterr := rmqc.ListVhosts()
+
+	if listhosterr != nil {
+		fmt.Println("Check admin Credentials:", listhosterr)
+		return listhosterr
+	}
+
+	resp, err1 := rmqc.PutUser(loginName, rabbithole.UserSettings{Password: loginPassword, Tags: "administrator"})
+	handleError(err1, "Failed to Update User Password")
+	fmt.Println(resp)
+
+	if err1 != nil {
+		return err1
 	}
 
 	resp2, err2 := rmqc.UpdatePermissionsIn("/", loginName, rabbithole.Permissions{Configure: ".*", Write: ".*", Read: ".*"})
 	handleError(err2, "Failed to update permission")
 	fmt.Println(resp2)
+
 	if err2 != nil {
 		return err2
 	}
@@ -75,7 +92,7 @@ func main() {
 		amqpProtocol = "amqps://"
 		fmt.Println("Start with secure amqps protocol")
 	}
-	amqpServerURL := []string{amqpProtocol, loginName, ":", loginPassword, "@", mqEndpoint, ":5671/"}
+	amqpServerURL := []string{amqpProtocol, url.QueryEscape(loginName), ":", url.QueryEscape(loginPassword), "@", mqEndpoint, ":5672/"}
 	conn, err := amqp.Dial(strings.Join(amqpServerURL, ""))
 	if err == nil {
 		log.Println("Password Already Updated")
